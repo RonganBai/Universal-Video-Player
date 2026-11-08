@@ -1,0 +1,5 @@
+PyQt6>=6.8
+numpy>=2.0
+av>=14.0
+pyinstaller>=6.0
+pillow>=10.0
