@@ -19,6 +19,7 @@ from PyQt6.QtCore import (QEasingCurve, QObject, QPoint, QPropertyAnimation,
                           pyqtSignal)
 
 APP = "万能视频播放器"
+DEFAULT_PL = "默认列表"
 BASE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 LOGO = os.path.join(BASE, "assets", "logo.ico")
 THUMB_DIR = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), APP, "thumbs")
@@ -79,6 +80,7 @@ from PyQt6.QtQuickWidgets import QQuickWidget
 import frame
 from audio_fx import AudioDialog, AudioEngine
 from PyQt6.QtWidgets import (
+    QComboBox,
     QApplication, QCheckBox, QColorDialog, QDialog, QDialogButtonBox,
     QDoubleSpinBox, QFileDialog, QFormLayout, QFrame, QGraphicsOpacityEffect,
     QGraphicsScene, QGraphicsView, QHBoxLayout, QInputDialog, QLabel,
@@ -99,7 +101,7 @@ IC = dict(play="", pause="", prev="", next="",
           add="", delete="", clear="", menu="",
           seq="", loop="", one="", shuffle="",
           speed="", folder="", link="", close="")
-IC.update(more="", wmin="", wmax="", wrestore="", wclose="", fx="")
+IC.update(chev_l="\uE76B", chev_r="\uE76C", more="", wmin="", wmax="", wrestore="", wclose="", fx="")
 MODES = [("顺序播放", "seq"), ("列表循环", "loop"), ("单曲循环", "one"), ("随机播放", "shuffle")]
 
 
@@ -186,7 +188,16 @@ def stylesheet():
     QLabel#res {{ font-size:{px(12)}px; color:rgba(255,255,255,0.6); }}
     QSlider::sub-page:horizontal {{ background:{a}; border-radius:2px; }}
 {handle_rules()}
-    #playlist {{ background:rgba(18,18,22,0.96); border-left:1px solid rgba(255,255,255,0.06); }}
+    #playlist {{ background:rgba(18,18,22,0.50); border-left:1px solid rgba(255,255,255,0.08); }}
+    QPushButton#plHandle {{ font-family:"{ICON_FONT}","Segoe MDL2 Assets"; font-size:{px(12)}px; color:#ececf0;
+        background:rgba(22,22,26,0.72); border:1px solid rgba(255,255,255,0.08); border-right:none;
+        border-top-left-radius:{px(10)}px; border-bottom-left-radius:{px(10)}px; padding:0; }}
+    QPushButton#plHandle:hover {{ background:rgba(60,60,68,0.85); }}
+    QPushButton#plHandle:pressed {{ background:rgba(90,90,100,0.9); }}
+    QComboBox#plCombo {{ background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.10);
+        border-radius:{px(8)}px; padding:{px(5)}px {px(10)}px; font-size:{px(14)}px; font-weight:600; min-height:{px(26)}px; }}
+    QComboBox#plCombo:hover {{ background:rgba(255,255,255,0.14); }}
+    QComboBox#plCombo::drop-down {{ border:none; width:{px(22)}px; }}
     QListWidget {{ background:transparent; border:none; font-size:{px(13)}px; outline:none; }}
     QListWidget::item {{ padding:{px(6)}px {px(6)}px; border-radius:8px; margin:1px 4px; color:#d8d8dc; }}
     QListWidget::item:hover {{ background:rgba(255,255,255,0.06); }}
@@ -864,16 +875,45 @@ class Bubble(QLabel):
         self.anim.start()
 
 
-VIDEO_QML = b"""
+VIDEO_QML = """
 import QtQuick
+import QtQuick.Effects
 import QtMultimedia
 Rectangle {
     id: root
     color: "black"
     property alias output: vo
+    // 播放列表抽屉后面的高斯模糊区域（由 Python 设置位置；宽度为 0 时不渲染，不耗 GPU）
+    property real blurX: 0
+    property real blurY: 0
+    property real blurW: 0
+    property real blurH: 0
     VideoOutput { id: vo; objectName: "vo"; anchors.fill: parent; fillMode: VideoOutput.PreserveAspectFit }
+    Item {
+        id: blurBox
+        x: root.blurX; y: root.blurY; width: root.blurW; height: root.blurH
+        visible: width > 1
+        clip: true
+        ShaderEffectSource {
+            id: snap
+            anchors.fill: parent
+            sourceItem: vo
+            sourceRect: Qt.rect(blurBox.x, blurBox.y, blurBox.width, blurBox.height)
+            live: true
+            visible: false
+        }
+        Rectangle { anchors.fill: parent; color: root.color }
+        MultiEffect {
+            anchors.fill: parent
+            source: snap
+            blurEnabled: true
+            blur: 1.0
+            blurMax: 48
+            autoPaddingEnabled: false
+        }
+    }
 }
-"""
+""".encode("utf-8")
 
 
 class VideoView(QQuickWidget):
@@ -951,12 +991,11 @@ class Stage(QWidget):
             return
         th = 0 if win.isFullScreen() else win.titlebar.height()
         win.titlebar.setGeometry(0, 0, w, win.titlebar.height())
-        # 播放列表：宽窗口为右侧面板与视频并排；窄窗口临时覆盖播放区
-        PW = px(340)
-        pl = win.playlist.isVisible()
-        side = pl and w >= px(900)
-        vw = w - PW if side else w
-        self.view.setGeometry(0, 0, vw, h)
+        # 播放列表：右侧抽屉，盖在画面上（70% 透明背景）；窄窗口时占满宽度
+        PW = px(340) if w >= px(520) else w
+        dx = int(PW * win.pl_p)
+        vw = w - dx if w >= px(700) else w        # 控制栏可用宽度（宽窗口时让出抽屉）
+        self.view.setGeometry(0, 0, w, h)
         # 顶部（渐变铺到窗口顶边，内容让到标题栏下方）
         win.top.layout().setContentsMargins(px(16), th + px(6), px(12), px(6))
         win.adapt_top(vw)
@@ -966,9 +1005,18 @@ class Stage(QWidget):
         win.adapt_bottom(vw - 2 * M)
         bh = win.bottom.sizeHint().height()
         win.bottom.setGeometry(M, h - bh - M, vw - 2 * M, bh)
-        if pl:
-            win.playlist.setGeometry(w - PW, th, PW, h - th) if side else win.playlist.setGeometry(0, th, w, h - th)
+        r = self.view.root
+        if win.playlist.isVisible():
+            win.playlist.setGeometry(w - dx, th, PW, h - th)
             win.playlist.raise_()
+            # 抽屉背后的视频做高斯模糊（视频层坐标 = stage 坐标）
+            for k, val in (("blurX", w - dx), ("blurY", th), ("blurW", dx), ("blurH", h - th)):
+                r.setProperty(k, float(val))
+        else:
+            r.setProperty("blurW", 0.0)
+        hw, hh = px(20), px(72)
+        win.pl_handle.setGeometry(w - dx - hw, th + (h - th - hh) // 2, hw, hh)
+        win.pl_handle.raise_()
         # 首次打开提示
         win.empty.adjustSize()
         win.empty.move((vw - win.empty.width()) // 2, (h - win.empty.height()) // 2)
@@ -1126,11 +1174,9 @@ class Player(QMainWindow):
         self.vol.setValue(cfg("volume"))
         self.set_mode(cfg("play_mode"))
         if cfg("remember_list"):
-            try:
-                saved = json.loads(CFG.value("playlist", "[]"))
-                self.add_files([p for p in saved if os.path.exists(p)], play=False)
-            except (ValueError, TypeError):
-                pass
+            self._load_lists()
+        else:
+            self._refresh_combo()
         self.show_controls()
 
     # ================= UI 构建 =================
@@ -1153,7 +1199,7 @@ class Player(QMainWindow):
         l.addWidget(self.info)
         l.addStretch(1)
         l.addWidget(self.btn_open)
-        l.addWidget(self.btn_list)
+        self.btn_list.hide()                 # 播放列表入口改为右侧边缘把手
 
     def _build_bottom(self):
         """底部：一块低对比度浮动面板。上排细进度条，下排常用按钮"""
@@ -1248,43 +1294,81 @@ class Player(QMainWindow):
         self.empty_btn = b
 
     def _build_playlist(self):
+        """右侧抽屉式播放列表：边缘把手点开，可建多个自定义列表"""
         self.playlist = QFrame(self.stage)
         self.playlist.setObjectName("playlist")
         v = QVBoxLayout(self.playlist)
-        v.setContentsMargins(10, 14, 10, 12)
+        v.setContentsMargins(px(10), px(12), px(10), px(10))
+        v.setSpacing(px(6))
+        # 第一行：列表选择 + 新建 / 更多 / 关闭
         h = QHBoxLayout()
-        t = QLabel("播放列表")
-        t.setObjectName("title")
-        self.pl_count = QLabel("")
-        self.pl_count.setObjectName("time")
-        close = bubble("close", "关闭")
+        h.setSpacing(px(2))
+        self.pl_combo = QComboBox()
+        self.pl_combo.setObjectName("plCombo")
+        self.pl_combo.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.pl_combo.setToolTip("切换播放列表")
+        self.pl_combo.activated.connect(lambda i: self.switch_playlist(self.pl_combo.itemText(i)))
+        b_new = bubble("add", "新建播放列表")
+        b_new.clicked.connect(self.new_playlist)
+        self.pl_more = bubble("more", "重命名 / 删除列表")
+        self.pl_more.clicked.connect(self._pl_menu)
+        close = bubble("close", "收起 (L)")
         close.clicked.connect(self.toggle_playlist)
-        h.addWidget(t)
-        h.addWidget(self.pl_count, 1)
-        h.addWidget(dock(close))
+        h.addWidget(self.pl_combo, 1)
+        h.addWidget(b_new)
+        h.addWidget(self.pl_more)
+        h.addWidget(close)
         v.addLayout(h)
-        ops = []
-        for ic, tip, fn in (("add", "添加文件", self.open_files), ("folder", "添加文件夹", self.open_folder),
-                            ("delete", "移除选中", self.remove_selected), ("clear", "清空列表", self.clear_list)):
+        # 第二行：添加文件 / 文件夹 / 移除 / 清空 + 数量
+        h2 = QHBoxLayout()
+        h2.setSpacing(px(2))
+        for ic, tip, fn in (("open", "添加文件", self.open_files), ("folder", "添加文件夹", self.open_folder),
+                            ("delete", "移除选中", self.remove_selected), ("clear", "清空此列表", self.clear_list)):
             b = bubble(ic, tip)
             b.clicked.connect(fn)
-            ops.append(b)
-        h2 = QHBoxLayout()
-        h2.addWidget(dock(*ops))
+            h2.addWidget(b)
         h2.addStretch(1)
+        self.pl_count = QLabel("")
+        self.pl_count.setObjectName("time")
+        h2.addWidget(self.pl_count)
         v.addLayout(h2)
-        v.addSpacing(4)
         self.list = QListWidget()
         self.list.setIconSize(QSize(TW, TH))
         self.list.setWordWrap(True)
         self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.list.setTextElideMode(Qt.TextElideMode.ElideMiddle)
         self.list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
         self.list.setDragDropMode(QListWidget.DragDropMode.InternalMove)
         self.list.model().rowsMoved.connect(self._rows_moved)
         self.list.itemDoubleClicked.connect(lambda it: self.play_index(self.list.row(it)))
+        self.list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.list.customContextMenuRequested.connect(self._item_menu)
         v.addWidget(self.list, 1)
         self.playlist.hide()
+        # 边缘把手：和其他控件一起定时隐藏
+        self.pl_handle = QPushButton(IC["chev_l"], self.stage)
+        self.pl_handle.setObjectName("plHandle")
+        self.pl_handle.setFont(QFont(ICON_FONT))
+        self.pl_handle.setToolTip("播放列表 (L)")
+        self.pl_handle.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.pl_handle.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.pl_handle.clicked.connect(self.toggle_playlist)
+        self.pl_handle.eff = QGraphicsOpacityEffect(self.pl_handle)
+        self.pl_handle.setGraphicsEffect(self.pl_handle.eff)
+        self.pl_handle.anim = QPropertyAnimation(self.pl_handle.eff, b"opacity", self.pl_handle)
+        self.pl_handle.anim.setDuration(250)
+        from PyQt6.QtCore import QVariantAnimation
+        self.pl_p = 0.0                       # 抽屉展开程度 0~1
+        self.pl_open = False
+        self.pl_anim = QVariantAnimation(self)
+        self.pl_anim.setDuration(240)
+        self.pl_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self.pl_anim.valueChanged.connect(self._drawer_step)
+        self.pl_anim.finished.connect(lambda: self.pl_open or self.playlist.hide())
+        # 多个播放列表
+        self.playlists = {DEFAULT_PL: []}
+        self.cur_pl = DEFAULT_PL
 
     def _shortcuts(self):
         st = lambda: cfg("seek_step") * 1000
@@ -1400,7 +1484,7 @@ class Player(QMainWindow):
         l = self.top.layout()
         m = l.contentsMargins()
         avail -= m.left() + m.right()
-        fixed = self.btn_open.sizeHint().width() + self.btn_list.sizeHint().width() + l.spacing() * 3 + px(24)
+        fixed = self.btn_open.sizeHint().width() + l.spacing() * 2 + px(24)
         fm = self.title.fontMetrics()
         full_w = fm.horizontalAdvance(self.full_title)
         res_w = self.info.sizeHint().width() + px(8)
@@ -1734,22 +1818,31 @@ class Player(QMainWindow):
             self.osd.flash(text, ms)
 
     # ================= 播放列表 =================
+    # ================= 播放列表：条目 =================
+    def _make_item(self, p):
+        it = QListWidgetItem(os.path.basename(p) or p)
+        it.setToolTip(p)
+        it.setData(Qt.ItemDataRole.UserRole, p)
+        it.setIcon(QIcon(self.placeholder))
+        self.thumbs.request(p)
+        return it
+
+    def _rebuild_list(self):
+        self.list.clear()
+        for p in self.files:
+            self.list.addItem(self._make_item(p))
+
     def add_files(self, paths, play=True):
         first_new = len(self.files)
         for p in paths:
-            p = os.path.normpath(p)
+            p = p if "://" in p else os.path.normpath(p)
             if p in self.files:
                 continue
             self.files.append(p)
-            it = QListWidgetItem(os.path.basename(p) or p)
-            it.setToolTip(p)
-            it.setData(Qt.ItemDataRole.UserRole, p)
-            it.setIcon(QIcon(self.placeholder))
-            self.list.addItem(it)
-            self.thumbs.request(p)
+            self.list.addItem(self._make_item(p))
         self._list_changed()
         if play and paths:
-            target = os.path.normpath(paths[0])
+            target = paths[0] if "://" in paths[0] else os.path.normpath(paths[0])
             self.play_index(self.files.index(target) if target in self.files else first_new)
 
     def _thumb_ready(self, path, img, dur):
@@ -1766,9 +1859,9 @@ class Player(QMainWindow):
         self._list_changed()
 
     def _list_changed(self):
-        self.pl_count.setText(f"  {len(self.files)} 项")
-        if cfg("remember_list"):
-            CFG.setValue("playlist", json.dumps(self.files, ensure_ascii=False))
+        self.playlists[self.cur_pl] = list(self.files)
+        self.pl_count.setText(f"{len(self.files)} 项")
+        self._save_lists()
         for i in range(self.list.count()):
             it = self.list.item(i)
             f = it.font()
@@ -1777,8 +1870,8 @@ class Player(QMainWindow):
         self._update_nav()
 
     def remove_selected(self):
-        for it in self.list.selectedItems():
-            r = self.list.row(it)
+        rows = sorted((self.list.row(it) for it in self.list.selectedItems()), reverse=True)
+        for r in rows:
             self.list.takeItem(r)
             self.files.pop(r)
             if r < self.idx:
@@ -1791,6 +1884,193 @@ class Player(QMainWindow):
         self.list.clear()
         self.files, self.idx = [], -1
         self._list_changed()
+
+    # ================= 播放列表：多个列表 =================
+    def _save_lists(self):
+        if cfg("remember_list"):
+            CFG.setValue("playlists", json.dumps(self.playlists, ensure_ascii=False))
+            CFG.setValue("current_playlist", self.cur_pl)
+
+    def _load_lists(self):
+        data = {}
+        try:
+            data = json.loads(CFG.value("playlists", "") or "{}")
+        except (ValueError, TypeError):
+            data = {}
+        if not data:                                # 迁移旧版的单一播放列表
+            try:
+                data = {DEFAULT_PL: json.loads(CFG.value("playlist", "[]"))}
+            except (ValueError, TypeError):
+                data = {DEFAULT_PL: []}
+        self.playlists = {k: [p for p in v if "://" in p or os.path.exists(p)]
+                          for k, v in data.items() if isinstance(v, list)} or {DEFAULT_PL: []}
+        cur = CFG.value("current_playlist", "")
+        self.cur_pl = cur if cur in self.playlists else next(iter(self.playlists))
+        self.files = list(self.playlists[self.cur_pl])
+        self.idx = -1
+        self._rebuild_list()
+        self._refresh_combo()
+        self._list_changed()
+
+    def _refresh_combo(self):
+        self.pl_combo.blockSignals(True)
+        self.pl_combo.clear()
+        for name, items in self.playlists.items():
+            self.pl_combo.addItem(name)
+        self.pl_combo.setCurrentText(self.cur_pl)
+        self.pl_combo.blockSignals(False)
+
+    def _playing_path(self):
+        u = self.player.source()
+        if not u.isValid():
+            return None
+        return os.path.normpath(u.toLocalFile()) if u.isLocalFile() else u.toString()
+
+    def switch_playlist(self, name):
+        if name not in self.playlists or name == self.cur_pl:
+            return
+        self.playlists[self.cur_pl] = list(self.files)
+        self.cur_pl = name
+        self.files = list(self.playlists[name])
+        cur = self._playing_path()
+        self.idx = self.files.index(cur) if cur in self.files else -1   # 正在播的视频不受影响
+        self._rebuild_list()
+        if self.idx >= 0:
+            self.list.setCurrentRow(self.idx)
+        self._refresh_combo()
+        self._list_changed()
+        self.flash_osd(f"播放列表：{name}")
+
+    def _unique_name(self, base):
+        name, n = base, 2
+        while name in self.playlists:
+            name, n = f"{base} {n}", n + 1
+        return name
+
+    def _ask_name(self, title, default):
+        name, ok = QInputDialog.getText(self, title, "列表名称：", text=default)
+        name = name.strip()
+        return name if ok and name else None
+
+    def new_playlist(self, paths=None):
+        name = self._ask_name("新建播放列表", self._unique_name("新建列表"))
+        if not name:
+            return None
+        name = self._unique_name(name) if name in self.playlists else name
+        self.playlists[name] = []
+        if paths:
+            self.playlists[name] = list(dict.fromkeys(paths))
+            self._refresh_combo()
+            self._save_lists()
+            self.flash_osd(f"已添加 {len(paths)} 项到「{name}」")
+        else:
+            self.switch_playlist(name)
+        return name
+
+    def rename_playlist(self):
+        old = self.cur_pl
+        name = self._ask_name("重命名播放列表", old)
+        if not name or name == old:
+            return
+        if name in self.playlists:
+            self.flash_osd(f"已有名为「{name}」的列表")
+            return
+        self.playlists = {(name if k == old else k): v for k, v in self.playlists.items()}
+        self.cur_pl = name
+        self._refresh_combo()
+        self._save_lists()
+
+    def delete_playlist(self):
+        from PyQt6.QtWidgets import QMessageBox
+        name = self.cur_pl
+        if len(self.playlists) <= 1:
+            self.flash_osd("至少保留一个播放列表")
+            return
+        r = QMessageBox.question(self, "删除播放列表",
+                                 f"删除播放列表「{name}」？\n（只删除列表，不会删除视频文件）")
+        if r != QMessageBox.StandardButton.Yes:
+            return
+        del self.playlists[name]
+        first = next(iter(self.playlists))
+        self.cur_pl = first
+        self.files = list(self.playlists[first])
+        cur = self._playing_path()
+        self.idx = self.files.index(cur) if cur in self.files else -1
+        self._rebuild_list()
+        self._refresh_combo()
+        self._list_changed()
+        self.flash_osd(f"已删除「{name}」，当前列表：{first}")
+
+    def add_to_playlist(self, paths, name):
+        lst = self.playlists.setdefault(name, [])
+        n = 0
+        for p in paths:
+            if p not in lst:
+                lst.append(p)
+                n += 1
+        self._save_lists()
+        self.flash_osd(f"已添加 {n} 项到「{name}」")
+
+    def _pl_menu(self):
+        m = QMenu(self)
+        m.addAction("重命名当前列表…", self.rename_playlist)
+        a = m.addAction("删除当前列表…", self.delete_playlist)
+        a.setEnabled(len(self.playlists) > 1)
+        m.addSeparator()
+        m.addAction("新建播放列表…", self.new_playlist)
+        self._set_active(self.pl_more, True)
+        m.aboutToHide.connect(lambda: self._set_active(self.pl_more, False))
+        m.exec(self.pl_more.mapToGlobal(QPoint(0, self.pl_more.height() + px(4))))
+
+    def _item_menu(self, pos):
+        it = self.list.itemAt(pos)
+        if it is None:
+            return
+        if not it.isSelected():
+            self.list.setCurrentItem(it)
+        paths = [i.data(Qt.ItemDataRole.UserRole) for i in self.list.selectedItems()]
+        m = QMenu(self)
+        m.addAction("播放", lambda: self.play_index(self.list.row(it)))
+        sub = m.addMenu(f"添加到播放列表（{len(paths)} 项）")
+        for name in self.playlists:
+            if name != self.cur_pl:
+                sub.addAction(name, lambda name=name: self.add_to_playlist(paths, name))
+        if sub.actions():
+            sub.addSeparator()
+        sub.addAction("新建列表…", lambda: self.new_playlist(paths))
+        m.addAction("从此列表移除", self.remove_selected)
+        p = it.data(Qt.ItemDataRole.UserRole)
+        if "://" not in p:
+            m.addSeparator()
+            m.addAction("在文件夹中显示", lambda: __import__("subprocess").Popen(["explorer", "/select,", p]))
+        m.exec(self.list.viewport().mapToGlobal(pos))
+
+    # ================= 播放列表：右侧抽屉 =================
+    def toggle_playlist(self):
+        self._set_drawer(not self.pl_open)
+
+    def _set_drawer(self, open_, animate=True):
+        self.pl_open = open_
+        self.pl_handle.setText(IC["chev_r"] if open_ else IC["chev_l"])
+        self.pl_handle.setToolTip("收起播放列表 (L)" if open_ else "播放列表 (L)")
+        if open_:
+            self.playlist.show()
+            self.playlist.raise_()
+            self.pl_handle.raise_()
+        self.pl_anim.stop()
+        if animate:
+            self.pl_anim.setStartValue(float(self.pl_p))
+            self.pl_anim.setEndValue(1.0 if open_ else 0.0)
+            self.pl_anim.start()
+        else:
+            self._drawer_step(1.0 if open_ else 0.0)
+            if not open_:
+                self.playlist.hide()
+        self.show_controls()
+
+    def _drawer_step(self, v):
+        self.pl_p = float(v)
+        self.stage.layout_overlays()
 
     # ================= 平滑过渡 =================
     def _fade(self, to, ms, then=None):
@@ -1891,13 +2171,6 @@ class Player(QMainWindow):
         self.btn_mode.setToolTip(f"播放模式：{name}")
         if osd:
             self.flash_osd(name)
-
-    def toggle_playlist(self):
-        self.playlist.setVisible(not self.playlist.isVisible())
-        self.playlist.raise_()
-        self._set_active(self.btn_list, self.playlist.isVisible())
-        self.stage.layout_overlays()
-        self.show_controls()
 
     # ================= 进度记忆 =================
     def _positions(self):
@@ -2050,13 +2323,14 @@ class Player(QMainWindow):
             self.bottom.fade(True)
             if not self.isFullScreen():
                 Bar.fade(self.titlebar, True)
+            Bar.fade(self.pl_handle, True)
         self.stage.unsetCursor()
         self.hide_timer.start()
 
     def auto_hide(self):
         playing = self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
         over = (self.bottom.underMouse() or self.top.underMouse() or self.playlist.underMouse()
-                or self.titlebar.underMouse())
+                or self.titlebar.underMouse() or self.pl_handle.underMouse())
         if not playing or over or QApplication.activePopupWidget() or QApplication.activeModalWidget():
             self.hide_timer.start()
             return
@@ -2064,6 +2338,7 @@ class Player(QMainWindow):
         self.bottom.fade(False)
         if self.titlebar.isVisible():
             Bar.fade(self.titlebar, False)
+        Bar.fade(self.pl_handle, False)
         if self.stage.underMouse():
             self.stage.setCursor(Qt.CursorShape.BlankCursor)
 
@@ -2120,8 +2395,7 @@ class Player(QMainWindow):
                 self.showNormal()
             self.normal_geo = self.geometry()
             self.mini = True
-            self.playlist.hide()
-            self._set_active(self.btn_list, False)
+            self._set_drawer(False, animate=False)
             if cfg("mini_on_top"):
                 self._set_on_top(True)
             scr = self.screen().availableGeometry()
@@ -2171,6 +2445,9 @@ class Player(QMainWindow):
             self.setGeometry(x, y, w, h)
 
     def escape(self):
+        if self.pl_open:
+            self.toggle_playlist()
+            return
         if self.isFullScreen():
             self.toggle_fullscreen()
         elif self.mini:

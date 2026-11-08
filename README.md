@@ -10,7 +10,8 @@
 - **全格式**：mp4 / mkv / avi / mov / flv / wmv / webm / ts / rmvb / mpg 等，以及 HLS(m3u8)、rtsp、rtmp 网络流
 - **现代界面**：自有窗口边框；低对比度浮动控制面板，播放时自动隐藏；按窗口宽度逐级折叠按钮
 - **进度条预览**：拖动时跟随滑块显示画面（后台关键帧解码 + 压缩缓存，内存占用低）
-- **播放列表**：缩略图、拖拽排序、记忆列表与每个视频的播放进度；宽窗口并排、窄窗口覆盖
+- **多个播放列表**：可新建 / 重命名 / 删除自定义列表，右键条目可添加到其他列表；缩略图、拖拽排序、记忆播放进度
+- **右侧抽屉**：列表收在窗口右边缘，把手随控件自动隐藏；展开后 50% 透明背景 + 背后画面高斯模糊
 - **倍速**：0.1×–4.0×，每档 0.1×
 - **音效**：声道模式、平衡、立体声宽度、耳机交叉馈送、虚拟环绕、多声道下混 / 直出
 - **平滑过渡**：切换上一个 / 下一个时画面与声音淡出淡入（可选）
@@ -39,7 +40,7 @@ python player.py
 powershell -ExecutionPolicy Bypass -File .\build.ps1
 ```
 
-产物：`dist\万能视频播放器\`（免安装版）与 `installer\Output\UniversalVideoPlayer-Setup-*.exe`（安装包）。
+产物：`%LOCALAPPDATA%\UVP_build\dist\万能视频播放器\`（免安装版）与 `installer\Output\UniversalVideoPlayer-Setup-*.exe`（安装包）。
 
 ## 项目结构
 
