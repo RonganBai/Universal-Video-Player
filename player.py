@@ -992,9 +992,11 @@ class Stage(QWidget):
         th = 0 if win.isFullScreen() else win.titlebar.height()
         win.titlebar.setGeometry(0, 0, w, win.titlebar.height())
         # 播放列表：右侧抽屉，盖在画面上（70% 透明背景）；窄窗口时占满宽度
-        PW = px(340) if w >= px(520) else w
+        PW = px(340)
+        if w - PW < px(360):                      # 太窄：抽屉占满整个宽度
+            PW = w
         dx = int(PW * win.pl_p)
-        vw = w - dx if w >= px(700) else w        # 控制栏可用宽度（宽窗口时让出抽屉）
+        vw = max(w - dx, px(360)) if PW < w else w   # 控制栏让到抽屉左侧
         self.view.setGeometry(0, 0, w, h)
         # 顶部（渐变铺到窗口顶边，内容让到标题栏下方）
         # 顶部渐变铺满整个窗口宽度，按钮让到抽屉左侧（避免抽屉上方出现一块断层）
@@ -1011,7 +1013,7 @@ class Stage(QWidget):
             # 抽屉从窗口顶边开始（标题栏半透明盖在其上），内容用上边距让出标题栏
             win.playlist.layout().setContentsMargins(px(10), th + px(12), px(10), px(10))
             win.playlist.setGeometry(w - dx, 0, PW, h)
-            win.playlist.raise_()
+            win.playlist.raise_()                 # 盖在顶栏、底栏之上
             # 抽屉背后的视频做高斯模糊（视频层坐标 = stage 坐标）
             for k, val in (("blurX", w - dx), ("blurY", 0), ("blurW", dx), ("blurH", h)):
                 r.setProperty(k, float(val))
@@ -1827,13 +1829,14 @@ class Player(QMainWindow):
         it.setToolTip(p)
         it.setData(Qt.ItemDataRole.UserRole, p)
         it.setIcon(QIcon(self.placeholder))
-        self.thumbs.request(p)
         return it
 
     def _rebuild_list(self):
         self.list.clear()
         for p in self.files:
             self.list.addItem(self._make_item(p))
+        for p in self.files:
+            self.thumbs.request(p)
 
     def add_files(self, paths, play=True):
         first_new = len(self.files)
@@ -1843,6 +1846,7 @@ class Player(QMainWindow):
                 continue
             self.files.append(p)
             self.list.addItem(self._make_item(p))
+            self.thumbs.request(p)
         self._list_changed()
         if play and paths:
             target = paths[0] if "://" in paths[0] else os.path.normpath(paths[0])
