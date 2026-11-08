@@ -2,7 +2,7 @@
 ; 构建：先运行 build.ps1 生成 dist\万能视频播放器，再由本脚本打包成单个安装程序
 
 #define AppName "万能视频播放器"
-#define AppVersion "1.1.0"
+#define AppVersion "1.1.1"
 #define AppPublisher "RonganBai"
 #define AppURL "https://github.com/RonganBai/Universal-Video-Player"
 #define AppExe "万能视频播放器.exe"

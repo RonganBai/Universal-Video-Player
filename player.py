@@ -997,9 +997,10 @@ class Stage(QWidget):
         vw = w - dx if w >= px(700) else w        # 控制栏可用宽度（宽窗口时让出抽屉）
         self.view.setGeometry(0, 0, w, h)
         # 顶部（渐变铺到窗口顶边，内容让到标题栏下方）
-        win.top.layout().setContentsMargins(px(16), th + px(6), px(12), px(6))
+        # 顶部渐变铺满整个窗口宽度，按钮让到抽屉左侧（避免抽屉上方出现一块断层）
+        win.top.layout().setContentsMargins(px(16), th + px(6), px(12) + (w - vw), px(6))
         win.adapt_top(vw)
-        win.top.setGeometry(0, 0, vw, th + px(38) + px(12))
+        win.top.setGeometry(0, 0, w, th + px(38) + px(12))
         # 底部浮动面板
         M = px(14)
         win.adapt_bottom(vw - 2 * M)
@@ -1007,10 +1008,12 @@ class Stage(QWidget):
         win.bottom.setGeometry(M, h - bh - M, vw - 2 * M, bh)
         r = self.view.root
         if win.playlist.isVisible():
-            win.playlist.setGeometry(w - dx, th, PW, h - th)
+            # 抽屉从窗口顶边开始（标题栏半透明盖在其上），内容用上边距让出标题栏
+            win.playlist.layout().setContentsMargins(px(10), th + px(12), px(10), px(10))
+            win.playlist.setGeometry(w - dx, 0, PW, h)
             win.playlist.raise_()
             # 抽屉背后的视频做高斯模糊（视频层坐标 = stage 坐标）
-            for k, val in (("blurX", w - dx), ("blurY", th), ("blurW", dx), ("blurH", h - th)):
+            for k, val in (("blurX", w - dx), ("blurY", 0), ("blurW", dx), ("blurH", h)):
                 r.setProperty(k, float(val))
         else:
             r.setProperty("blurW", 0.0)
