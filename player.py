@@ -101,7 +101,7 @@ IC = dict(play="", pause="", prev="", next="",
           add="", delete="", clear="", menu="",
           seq="", loop="", one="", shuffle="",
           speed="", folder="", link="", close="")
-IC.update(chev_l="\uE76B", chev_r="\uE76C", more="", wmin="", wmax="", wrestore="", wclose="", fx="")
+IC.update(rewind="\uEB9E", ffwd="\uEB9D", pin="\uE718", pinned="\uE842", chev_l="\uE76B", chev_r="\uE76C", more="", wmin="", wmax="", wrestore="", wclose="", fx="")
 MODES = [("顺序播放", "seq"), ("列表循环", "loop"), ("单曲循环", "one"), ("随机播放", "shuffle")]
 
 
@@ -169,6 +169,13 @@ def stylesheet():
     /* 播放键：40px 浅色实心圆 + 深色图标 */
     QPushButton#playBtn {{ background:transparent; border:none; padding:0; margin:0;
         min-width:{px(52)}px; max-width:{px(52)}px; min-height:{px(52)}px; max-height:{px(52)}px; }}
+    QPushButton#playBtnMini {{ background:transparent; border:none; padding:0; margin:0;
+        min-width:{px(38)}px; max-width:{px(38)}px; min-height:{px(38)}px; max-height:{px(38)}px; }}
+    QPushButton[mini="true"] {{ font-size:{px(14)}px; min-width:{px(30)}px; max-width:{px(30)}px;
+        min-height:{px(30)}px; max-height:{px(30)}px; border-radius:{px(8)}px; }}
+    QFrame#miniPanel {{ background:rgba(14,14,18,0.40); border:none; border-radius:{px(10)}px; }}
+    QLabel#time2 {{ font-size:{px(11)}px; color:rgba(255,255,255,0.85); padding-right:{px(2)}px; }}
+    #titlebar[mini="true"] {{ background:rgba(0,0,0,0.22); }}
     QFrame#preview {{ background:rgba(18,18,22,0.94); border:1px solid rgba(255,255,255,0.10); border-radius:{px(10)}px; }}
     QLabel#previewImg {{ background:#0c0c0e; border-radius:{px(7)}px; color:rgba(255,255,255,0.5); font-size:{px(12)}px; }}
     QLabel#previewTime {{ font-size:{px(13)}px; font-weight:600; color:#f2f2f4; }}
@@ -445,9 +452,10 @@ class PlayButton(QPushButton):
     - 松开：带回弹放大回原尺寸，并向外扩散一圈波纹
     - 播放/暂停切换：图标弹一下
     """
-    def __init__(self, glyph, tip):
+    def __init__(self, glyph, tip, radius=20, name="playBtn"):
         super().__init__(glyph)
-        self.setObjectName("playBtn")
+        self.radius = radius
+        self.setObjectName(name)
         self.setToolTip(tip)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -501,7 +509,7 @@ class PlayButton(QPushButton):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         c = self.rect().center()
         cx, cy = c.x() + 0.5, c.y() + 0.5
-        base_r = px(20)
+        base_r = px(self.radius)
         r = base_r * self._scale
         # 波纹：从圆边向外扩散并淡出
         if 0 < self._ripple < 1:
@@ -523,7 +531,7 @@ class PlayButton(QPushButton):
         p.drawEllipse(QRectF(cx - r, cy - r, r * 2, r * 2))
         # 图标
         f = QFont(ICON_FONT)
-        f.setPixelSize(max(6, int(px(16) * self._scale * self._icon)))
+        f.setPixelSize(max(6, int(px(16) * self.radius / 20 * self._scale * self._icon)))
         p.setFont(f)
         p.setPen(QColor("#16161a"))
         p.drawText(QRectF(cx - r, cy - r, r * 2, r * 2), Qt.AlignmentFlag.AlignCenter, self.text())
@@ -773,6 +781,65 @@ class PreviewPopup(QFrame):
 
     def clear(self):
         self.img.setPixmap(QPixmap())
+
+
+class CenterIcon(QWidget):
+    """画面中央的播放/暂停提示（Windows 11 媒体风格）：
+    半透明深色圆底 + 圆角实心图形（两根圆角竖条 / 圆角三角形），轻微放大后淡出"""
+    def __init__(self, parent):
+        super().__init__(parent)
+        from PyQt6.QtCore import QVariantAnimation
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.kind = "pause"
+        self._t = 1.0
+        self.setFixedSize(px(84), px(84))
+        self.anim = QVariantAnimation(self)
+        self.anim.setDuration(650)
+        self.anim.setStartValue(0.0)
+        self.anim.setEndValue(1.0)
+        self.anim.valueChanged.connect(lambda v: (setattr(self, "_t", float(v)), self.update()))
+        self.anim.finished.connect(self.hide)
+        self.hide()
+
+    def flash(self, kind):
+        self.kind = kind
+        self.setFixedSize(px(84), px(84))
+        self.parent().layout_overlays()
+        self.show()
+        self.raise_()
+        self.anim.stop()
+        self.anim.start()
+
+    def paintEvent(self, e):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        t = self._t
+        alpha = 1.0 if t < 0.45 else max(0.0, 1 - (t - 0.45) / 0.55)
+        scale = 0.88 + 0.12 * min(1.0, t / 0.3)
+        cx, cy = self.width() / 2, self.height() / 2
+        R = min(cx, cy) * scale
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(0, 0, 0, int(130 * alpha)))
+        p.drawEllipse(QRectF(cx - R, cy - R, 2 * R, 2 * R))
+        p.setBrush(QColor(255, 255, 255, int(240 * alpha)))
+        if self.kind == "pause":
+            bw, bh, gap = R * 0.20, R * 0.76, R * 0.20
+            rr = bw * 0.38
+            for x in (cx - gap / 2 - bw, cx + gap / 2):
+                p.drawRoundedRect(QRectF(x, cy - bh / 2, bw, bh), rr, rr)
+        else:
+            from PyQt6.QtGui import QPen
+            s = R * 0.62
+            ox = cx + s * 0.12
+            path = QPainterPath()
+            path.moveTo(ox - s * 0.45, cy - s * 0.55)
+            path.lineTo(ox + s * 0.55, cy)
+            path.lineTo(ox - s * 0.45, cy + s * 0.55)
+            path.closeSubpath()
+            pen = QPen(QColor(255, 255, 255, int(240 * alpha)), R * 0.12)
+            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            p.setPen(pen)
+            p.drawPath(path)
 
 
 class Spinner(QWidget):
@@ -1029,6 +1096,9 @@ class Stage(QWidget):
         win.center.move(cx - win.center.width() // 2, h // 2 - win.center.height() // 2)
         win.osd.adjustSize()
         win.osd.move(cx - win.osd.width() // 2, th + px(64))
+        if win.mini:
+            win._layout_mini(w, h)
+            win.center.move((w - win.center.width()) // 2, (h - win.center.height()) // 2)
         win.titlebar.raise_()
 
     def resizeEvent(self, e):
@@ -1156,8 +1226,9 @@ class Player(QMainWindow):
         self._build_bottom()
         self._build_playlist()
         self._build_empty()
+        self._build_mini()
         self.full_title = ""
-        self.center = Bubble(self.stage)
+        self.center = CenterIcon(self.stage)
         self.osd = Bubble(self.stage, font=17, icon=False)
 
         self.player.positionChanged.connect(self.on_pos)
@@ -1203,7 +1274,7 @@ class Player(QMainWindow):
         l.addSpacing(px(8))
         l.addWidget(self.info)
         l.addStretch(1)
-        l.addWidget(self.btn_open)
+        self.btn_open.hide()                 # 不再放「打开文件」快捷图标
         self.btn_list.hide()                 # 播放列表入口改为右侧边缘把手
 
     def _build_bottom(self):
@@ -1489,7 +1560,7 @@ class Player(QMainWindow):
         l = self.top.layout()
         m = l.contentsMargins()
         avail -= m.left() + m.right()
-        fixed = self.btn_open.sizeHint().width() + l.spacing() * 2 + px(24)
+        fixed = px(24)
         fm = self.title.fontMetrics()
         full_w = fm.horizontalAdvance(self.full_title)
         res_w = self.info.sizeHint().width() + px(8)
@@ -1587,7 +1658,7 @@ class Player(QMainWindow):
         else:
             self.toggle_mute()
 
-    def volume_popup(self):
+    def volume_popup(self, anchor=None):
         """垂直音量浮窗：点浮窗外关闭（这次点击不会传给视频，不会暂停）"""
         m = QMenu(self)
         m.setObjectName("volpop")
@@ -1626,7 +1697,7 @@ class Player(QMainWindow):
         m.addAction(wa)
         m.aboutToHide.connect(lambda: (CFG.setValue("volume", self.vol.value()), self.show_controls()))
         sz = m.sizeHint()
-        b = self.btn_vol
+        b = anchor or self.btn_vol
         m.exec(b.mapToGlobal(QPoint(b.width() // 2 - sz.width() // 2, -sz.height() - px(8))))
 
     SPEEDS = (0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0)
@@ -1777,10 +1848,10 @@ class Player(QMainWindow):
             return
         if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
             self.player.pause()
-            self.center.flash(IC["pause"])
+            self.center.flash("pause")
         else:
             self.player.play()
-            self.center.flash(IC["play"])
+            self.center.flash("play")
 
     def seek_by(self, d):
         self.player.setPosition(max(0, min(self.player.duration(), self.player.position() + d)))
@@ -1815,7 +1886,10 @@ class Player(QMainWindow):
         self.flash_osd("已静音" if self.audio.isMuted() else f"音量 {self.vol.value()}%")
 
     def _vol_icon(self):
-        self.btn_vol.setText(IC["mute"] if self.audio.isMuted() or self.vol.value() == 0 else IC["vol"])
+        g = IC["mute"] if self.audio.isMuted() or self.vol.value() == 0 else IC["vol"]
+        self.btn_vol.setText(g)
+        if hasattr(self, "m_vol"):
+            self.m_vol.setText(g)
         self._apply_volume()
 
     def flash_osd(self, text, ms=1100):
@@ -2054,6 +2128,8 @@ class Player(QMainWindow):
 
     # ================= 播放列表：右侧抽屉 =================
     def toggle_playlist(self):
+        if self.mini:                       # 小窗模式不展开播放列表
+            return
         self._set_drawer(not self.pl_open)
 
     def _set_drawer(self, open_, animate=True):
@@ -2230,8 +2306,11 @@ class Player(QMainWindow):
             e.acceptProposedAction()
 
     def dropEvent(self, e):
+        self._drop_urls(e.mimeData().urls())
+
+    def _drop_urls(self, urls):
         ps = []
-        for u in e.mimeData().urls():
+        for u in urls:
             p = u.toLocalFile()
             ps += self._scan(p) if os.path.isdir(p) else [p]
         self.add_files(ps)
@@ -2246,6 +2325,9 @@ class Player(QMainWindow):
             self._fade(1.0, cfg("transition_ms"))           # 新视频已出画面：淡入
         self._maybe_prefade(p)
         self.seek.setValue(p)
+        if not self.seek2.isSliderDown():
+            self.seek2.setValue(p)
+            self.time2.setText(f"{fmt(p)} / {fmt(self.player.duration())}")
         self.time.setText(fmt(p) if self.time_short else f"{fmt(p)} / {fmt(self.player.duration())}")
 
     def _fadein_fallback(self):
@@ -2274,6 +2356,7 @@ class Player(QMainWindow):
 
     def on_dur(self, d):
         self.seek.setRange(0, d)
+        self.seek2.setRange(0, d)
 
     def on_state(self, s):
         playing = s == QMediaPlayer.PlaybackState.PlayingState
@@ -2281,6 +2364,9 @@ class Player(QMainWindow):
         if self.btn_play.text() != new:
             self.btn_play.setText(new)
             self.btn_play.bounce()
+        if self.m_play.text() != new:
+            self.m_play.setText(new)
+            self.m_play.bounce()
         self.show_controls()
 
     def on_status(self, st):
@@ -2323,34 +2409,154 @@ class Player(QMainWindow):
         self.info.setText(f"{res.width()}×{res.height()}" if res and res.isValid() else "")
         self.stage.layout_overlays()
 
+    # ================= 小窗模式（精简界面） =================
+    def _build_mini(self):
+        """小窗专用的精简底栏：后退、播放/暂停、前进、音量、进度条、时间；更透明、更矮"""
+        self.mini_bar = Bar(top=False)
+        self.mini_bar.setParent(self.stage)
+        outer = QVBoxLayout(self.mini_bar)
+        outer.setContentsMargins(0, 0, 0, 0)
+        panel = QFrame()
+        panel.setObjectName("miniPanel")
+        outer.addWidget(panel)
+        v = QVBoxLayout(panel)
+        v.setContentsMargins(px(8), px(2), px(8), px(4))
+        v.setSpacing(0)
+        self.seek2 = SeekSlider()
+        self.seek2.setRange(0, 0)
+        self.seek2.sliderMoved.connect(lambda x: self.time2.setText(fmt(x)))
+        self.seek2.sliderReleased.connect(lambda: self.player.setPosition(self.seek2.value()))
+        v.addWidget(self.seek2)
+        r = QHBoxLayout()
+        r.setSpacing(px(2))
+        st = lambda: cfg("seek_step") * 1000
+        self.m_back = bubble("rewind", "后退")
+        self.m_back.clicked.connect(lambda: self.seek_by(-st()))
+        self.m_play = PlayButton(IC["play"], "播放/暂停 (空格)", radius=15, name="playBtnMini")
+        self.m_play.clicked.connect(self.toggle_play)
+        self.m_fwd = bubble("ffwd", "前进")
+        self.m_fwd.clicked.connect(lambda: self.seek_by(st()))
+        self.m_vol = bubble("vol", "音量")
+        self.m_vol.clicked.connect(lambda: self.volume_popup(self.m_vol))
+        for b in (self.m_back, self.m_fwd, self.m_vol):
+            b.setProperty("mini", True)
+        self.time2 = QLabel("00:00")
+        self.time2.setObjectName("time2")
+        for wd in (self.m_back, self.m_play, self.m_fwd, self.m_vol):
+            r.addWidget(wd)
+        r.addStretch(1)
+        r.addWidget(self.time2)
+        v.addLayout(r)
+        self.mini_bar.hide()
+        # 小窗标题栏按钮：窗口置顶、退出小窗（插在关闭按钮之前）
+        tb = self.titlebar
+        self.tb_pin = QPushButton(IC["pin"])
+        self.tb_unmini = QPushButton(IC["unfull"])
+        for b, tip, fn in ((self.tb_pin, "窗口置顶", self._toggle_pin),
+                           (self.tb_unmini, "退出小窗 (P / Esc)", self.toggle_mini)):
+            b.setObjectName("wbtn")
+            b.setFont(QFont(ICON_FONT))
+            b.setToolTip(tip)
+            b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            b.clicked.connect(fn)
+            b.hide()
+        lay = tb.layout()
+        i = lay.indexOf(tb.btns[0])
+        lay.insertWidget(i, self.tb_pin)
+        lay.insertWidget(i + 1, self.tb_unmini)
+        self.mini_pinned = False
+
+    def _toggle_pin(self):
+        self.mini_pinned = not self.mini_pinned
+        self._set_on_top(self.mini_pinned)
+        self._sync_pin()
+        self.flash_osd("窗口已置顶" if self.mini_pinned else "已取消置顶")
+
+    def _sync_pin(self):
+        self.tb_pin.setText(IC["pinned"] if self.mini_pinned else IC["pin"])
+        self.tb_pin.setToolTip("取消置顶" if self.mini_pinned else "窗口置顶")
+        self._set_active(self.tb_pin, self.mini_pinned)
+
+    def _apply_mini_ui(self, on):
+        tb = self.titlebar
+        tb.logo.setVisible(not on)
+        tb.btns[0].setVisible(not on)       # 最小化
+        tb.btns[1].setVisible(not on)       # 最大化
+        self.tb_pin.setVisible(on)
+        self.tb_unmini.setVisible(on)
+        tb.setProperty("mini", on)
+        tb.style().unpolish(tb)
+        tb.style().polish(tb)
+        self.top.setVisible(not on)
+        self.bottom.setVisible(not on)
+        self.mini_bar.setVisible(on)
+        self.pl_handle.setVisible(not on)
+        if on:
+            self.mini_bar.eff.setOpacity(1)
+            self._sync_pin()
+        else:
+            tb.setText(APP)
+            self.top.eff.setOpacity(1)
+            self.bottom.eff.setOpacity(1)
+            self.pl_handle.eff.setOpacity(1)
+        self.stage.layout_overlays()
+
+    def _layout_mini(self, w, h):
+        """小窗布局：精简底栏贴底；标题栏显示视频名称"""
+        M = px(5)
+        mh = self.mini_bar.sizeHint().height()
+        self.mini_bar.setGeometry(M, h - mh - M, w - 2 * M, mh)
+        self.mini_bar.raise_()
+        name = getattr(self, "full_title", "") or APP
+        lab = self.titlebar.title
+        room = max(px(30), w - px(46) * 3 - px(24))
+        lab.setText(lab.fontMetrics().elidedText(name, Qt.TextElideMode.ElideMiddle, room))
+        self.titlebar.setToolTip(name)
+
     # ================= 自动隐藏 =================
+    def _bars(self):
+        return [self.mini_bar] if self.mini else [self.top, self.bottom]
+
     def show_controls(self):
-        if not self.bottom.isVisible() or self.bottom.eff.opacity() < 1:
-            self.top.fade(True)
-            self.bottom.fade(True)
+        if not hasattr(self, "mini_bar"):
+            return
+        ref = self._bars()[-1]
+        if not ref.isVisible() or ref.eff.opacity() < 1:
+            for b in self._bars():
+                b.fade(True)
             if not self.isFullScreen():
                 Bar.fade(self.titlebar, True)
-            Bar.fade(self.pl_handle, True)
+            if not self.mini:
+                Bar.fade(self.pl_handle, True)
         self.stage.unsetCursor()
         self.hide_timer.start()
 
     def auto_hide(self):
         playing = self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
         over = (self.bottom.underMouse() or self.top.underMouse() or self.playlist.underMouse()
-                or self.titlebar.underMouse() or self.pl_handle.underMouse())
+                or self.titlebar.underMouse() or self.pl_handle.underMouse() or self.mini_bar.underMouse())
         if not playing or over or QApplication.activePopupWidget() or QApplication.activeModalWidget():
             self.hide_timer.start()
             return
-        self.top.fade(False)
-        self.bottom.fade(False)
+        for b in self._bars():
+            b.fade(False)
         if self.titlebar.isVisible():
             Bar.fade(self.titlebar, False)
-        Bar.fade(self.pl_handle, False)
+        if not self.mini:
+            Bar.fade(self.pl_handle, False)
         if self.stage.underMouse():
             self.stage.setCursor(Qt.CursorShape.BlankCursor)
 
     def eventFilter(self, obj, e):
-        if e.type() in (e.Type.MouseMove, e.Type.MouseButtonPress) and isinstance(obj, QWidget) \
+        t = e.type()
+        if t in (e.Type.DragEnter, e.Type.DragMove, e.Type.Drop) and isinstance(obj, QWidget) \
+                and obj.window() is self and e.mimeData().hasUrls():
+            # 拖入外部文件：窗口任何位置（视频、控制栏、播放列表…）都能导入
+            e.acceptProposedAction()
+            if t == e.Type.Drop:
+                self._drop_urls(e.mimeData().urls())
+            return True
+        if t in (e.Type.MouseMove, e.Type.MouseButtonPress) and isinstance(obj, QWidget) \
                 and obj.window() is self:
             self.show_controls()
         return False
@@ -2403,8 +2609,10 @@ class Player(QMainWindow):
             self.normal_geo = self.geometry()
             self.mini = True
             self._set_drawer(False, animate=False)
-            if cfg("mini_on_top"):
+            self.mini_pinned = cfg("mini_on_top")
+            if self.mini_pinned:
                 self._set_on_top(True)
+            self._apply_mini_ui(True)
             scr = self.screen().availableGeometry()
             # 按视频比例缩放进「屏幕宽 30% × 屏幕高 45%」的框内：竖屏视频也不会超出屏幕
             res = self.player.metaData().value(QMediaMetaData.Key.Resolution)
@@ -2421,6 +2629,7 @@ class Player(QMainWindow):
         else:
             self.mini = False
             self._set_on_top(False)
+            self._apply_mini_ui(False)
             self.setMinimumSize(360, 220)
             if self.normal_geo:
                 self.setGeometry(self.normal_geo)
